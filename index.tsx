@@ -280,7 +280,23 @@ export class TmaLiveAudio extends LitElement {
   private async initSession() {
     const model = 'gemini-2.5-flash-preview-native-audio-dialog';
 
+    // Close existing session if it exists
+    if (this.session) {
+      try {
+        this.session.close();
+      } catch (e) {
+        console.log('Previous session already closed');
+      }
+      this.session = null;
+    }
+
+    // Wait a bit for cleanup
+    await new Promise(resolve => setTimeout(resolve, 100));
+
     try {
+      this.updateStatus('Подключение к AI...');
+      this.isConnected = false;
+
       this.session = await this.client.live.connect({
         model: model,
         callbacks: {
@@ -327,11 +343,13 @@ export class TmaLiveAudio extends LitElement {
             }
           },
           onerror: (e: ErrorEvent) => {
-            this.updateError(e.message);
+            console.error('Session error:', e);
+            this.updateError('Ошибка соединения с AI');
             this.isConnected = false;
             this.hapticFeedback('error');
           },
           onclose: (e: CloseEvent) => {
+            console.log('Session closed:', e.code, e.reason);
             this.updateStatus('Соединение закрыто');
             this.isConnected = false;
           },
@@ -344,8 +362,9 @@ export class TmaLiveAudio extends LitElement {
         },
       });
     } catch (e) {
-      console.error(e);
+      console.error('Failed to connect:', e);
       this.updateError('Ошибка подключения к AI');
+      this.isConnected = false;
     }
   }
 
@@ -410,11 +429,18 @@ export class TmaLiveAudio extends LitElement {
       );
 
       this.scriptProcessorNode.onaudioprocess = (audioProcessingEvent) => {
-        if (!this.isRecording) return;
+        if (!this.isRecording || !this.session || !this.isConnected) return;
 
         const inputBuffer = audioProcessingEvent.inputBuffer;
         const pcmData = inputBuffer.getChannelData(0);
-        this.session.sendRealtimeInput({media: createBlob(pcmData)});
+
+        try {
+          this.session.sendRealtimeInput({media: createBlob(pcmData)});
+        } catch (e) {
+          console.error('Failed to send audio data:', e);
+          this.stopRecording();
+          this.updateError('Потеряно соединение с AI');
+        }
       };
 
       this.sourceNode.connect(this.scriptProcessorNode);
@@ -465,11 +491,18 @@ export class TmaLiveAudio extends LitElement {
     this.updateStatus('Готов к разговору');
   }
 
-  private reset() {
+  private async reset() {
     this.hapticFeedback('medium');
-    this.session?.close();
-    this.initSession();
-    this.updateStatus('Сессия сброшена');
+    this.updateStatus('Переподключение...');
+
+    // Stop recording if active
+    if (this.isRecording) {
+      this.stopRecording();
+    }
+
+    // Reset will be handled in initSession
+    await this.initSession();
+    this.updateStatus('Готов к разговору');
   }
 
   render() {
